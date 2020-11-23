@@ -220,5 +220,4 @@ type ACLTokenEvent struct {
 
 type ACLPolicyEvent struct {
 	ACLPolicy *ACLPolicy
-	ACLTokens []*ACLToken
 }

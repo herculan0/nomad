@@ -158,10 +158,21 @@ func (e *EventBroker) handleACLUpdates(ctx context.Context) {
 		case update := <-e.aclCh:
 			switch payload := update.Payload.(type) {
 			case structs.ACLTokenEvent:
+				// Token was deleted
 				if update.Type == structs.TypeACLTokenDeleted {
 					e.subscriptions.closeSubscriptionsForTokens([]string{payload.ACLToken.SecretID})
 				}
+
+				// Token was updated
+				// policy was removed, unsub
+				// policy was added or not removed, ignore
+				// check acl permissions against each subscriptions subribe request
 			case structs.ACLPolicyEvent:
+				// given a set of tokens that are subscribed to stream,
+				// are any of their policies this policy
+				// if the policy was deleted, does it affect the subscribe
+
+				// re-run the subscribe rules
 			}
 			// logic
 		}

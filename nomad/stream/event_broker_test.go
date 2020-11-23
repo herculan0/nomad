@@ -134,14 +134,7 @@ func TestEventBroker_handleACLUpdates(t *testing.T) {
 		},
 	}
 
-	// Publish acl event and subsequent events to ensure we eventually get an
-	// unssubscribed error
 	publisher.Publish(&structs.Events{Index: 100, Events: []structs.Event{aclEvent}})
-	for i := 101; i < 110; i++ {
-		idx := uint64(i)
-		publisher.Publish(&structs.Events{Index: idx, Events: []structs.Event{{Index: idx}}})
-	}
-
 	for {
 		_, err := sub1.Next(ctx)
 		if err == ErrSubscriptionClosed {
