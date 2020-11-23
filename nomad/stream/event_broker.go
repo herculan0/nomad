@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 
 	"github.com/hashicorp/go-hclog"
@@ -74,9 +75,18 @@ func (e *EventBroker) Len() int {
 
 // Publish events to all subscribers of the event Topic.
 func (e *EventBroker) Publish(events *structs.Events) {
-	if len(events.Events) > 0 {
-		e.publishCh <- events
+	if len(events.Events) == 0 {
+		return
 	}
+
+	// ACL check subscriptions
+	for _, e := range events.Events {
+		if e.Type == state.TypeACLTokenDeleted {
+
+		}
+	}
+
+	e.publishCh <- events
 }
 
 // Subscribe returns a new Subscription for a given request. A Subscription
@@ -90,7 +100,7 @@ func (e *EventBroker) Publish(events *structs.Events) {
 // will be returned.
 //
 // When a caller is finished with the subscription it must call Subscription.Unsubscribe
-// to free ACL tracking resources. TODO(drew) ACL tracking
+// to free ACL tracking resources.
 func (e *EventBroker) Subscribe(req *SubscribeRequest) (*Subscription, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

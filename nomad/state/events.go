@@ -47,6 +47,14 @@ func eventsFromChanges(tx ReadTxn, changes Changes) *structs.Events {
 func eventFromChange(change memdb.Change) (structs.Event, bool) {
 	if change.Deleted() {
 		switch before := change.Before.(type) {
+		case *structs.ACLToken:
+			return structs.Event{
+				Topic: structs.TopicACLToken,
+				Key:   before.AccessorID,
+				Payload: structs.ACLTokenEvent{
+					ACLToken: before,
+				},
+			}, true
 		case *structs.Node:
 			return structs.Event{
 				Topic: structs.TopicNode,

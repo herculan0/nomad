@@ -30,6 +30,8 @@ const (
 	TopicAlloc      Topic = "Alloc"
 	TopicJob        Topic = "Job"
 	TopicNode       Topic = "Node"
+	TopicACLPolicy  Topic = "ACLToken"
+	TopicACLToken   Topic = "ACLPolicy"
 	TopicAll        Topic = "*"
 
 	TypeNodeRegistration         = "NodeRegistration"
@@ -209,4 +211,13 @@ type DeploymentEvent struct {
 // NodeStreamEvent holds a newly updated Node
 type NodeStreamEvent struct {
 	Node *Node
+}
+
+type ACLTokenEvent struct {
+	ACLToken *ACLToken
+}
+
+type ACLPolicyEvent struct {
+	ACLPolicy *ACLPolicy
+	ACLTokens []*ACLToken
 }
