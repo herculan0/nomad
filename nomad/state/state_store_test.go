@@ -8190,8 +8190,7 @@ func TestStateStore_UpsertACLTokens(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	if err := state.UpsertACLTokens(1000,
-		[]*structs.ACLToken{tk1, tk2}); err != nil {
+	if err := state.UpsertACLTokens(structs.MsgTypeTestSetup, 1000, []*structs.ACLToken{tk1, tk2}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if !watchFired(ws) {
@@ -8254,8 +8253,7 @@ func TestStateStore_DeleteACLTokens(t *testing.T) {
 	tk2 := mock.ACLToken()
 
 	// Create the tokens
-	if err := state.UpsertACLTokens(1000,
-		[]*structs.ACLToken{tk1, tk2}); err != nil {
+	if err := state.UpsertACLTokens(structs.MsgTypeTestSetup, 1000, []*structs.ACLToken{tk1, tk2}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -8332,7 +8330,7 @@ func TestStateStore_ACLTokenByAccessorIDPrefix(t *testing.T) {
 	for _, prefix := range prefixes {
 		tk := mock.ACLToken()
 		tk.AccessorID = prefix + tk.AccessorID[4:]
-		if err := state.UpsertACLTokens(baseIndex, []*structs.ACLToken{tk}); err != nil {
+		if err := state.UpsertACLTokens(structs.MsgTypeTestSetup, baseIndex, []*structs.ACLToken{tk}); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 		baseIndex++
@@ -8399,8 +8397,7 @@ func TestStateStore_ACLTokensByGlobal(t *testing.T) {
 	tk4 := mock.ACLToken()
 	tk3.Global = true
 
-	if err := state.UpsertACLTokens(1000,
-		[]*structs.ACLToken{tk1, tk2, tk3, tk4}); err != nil {
+	if err := state.UpsertACLTokens(structs.MsgTypeTestSetup, 1000, []*structs.ACLToken{tk1, tk2, tk3, tk4}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
