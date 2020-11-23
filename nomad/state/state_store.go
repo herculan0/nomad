@@ -5234,8 +5234,8 @@ func (s *StateStore) CanBootstrapACLToken() (bool, uint64, error) {
 }
 
 // BootstrapACLToken is used to create an initial ACL token
-func (s *StateStore) BootstrapACLTokens(index, resetIndex uint64, token *structs.ACLToken) error {
-	txn := s.db.WriteTxn(index)
+func (s *StateStore) BootstrapACLTokens(msgType structs.MessageType, index uint64, resetIndex uint64, token *structs.ACLToken) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Check if we have already done a bootstrap
