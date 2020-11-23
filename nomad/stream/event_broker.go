@@ -82,7 +82,7 @@ func (e *EventBroker) Publish(events *structs.Events) {
 	// ACL check subscriptions
 	for _, e := range events.Events {
 		if e.Type == state.TypeACLTokenDeleted {
-
+			// TODO close subscription for this token
 		}
 	}
 
