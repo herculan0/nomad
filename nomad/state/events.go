@@ -24,6 +24,7 @@ var MsgTypeEvents = map[structs.MessageType]string{
 	structs.DeploymentPromoteRequestType:            structs.TypeDeploymentPromotion,
 	structs.DeploymentAllocHealthRequestType:        structs.TypeDeploymentAllocHealth,
 	structs.ApplyPlanResultsRequestType:             structs.TypePlanResult,
+	structs.ACLTokenDeleteRequestType:               structs.TypeACLTokenDeleted,
 }
 
 func eventsFromChanges(tx ReadTxn, changes Changes) *structs.Events {

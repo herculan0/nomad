@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
-	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 
 	"github.com/hashicorp/go-hclog"
@@ -36,6 +35,8 @@ type EventBroker struct {
 	// the Commit call in the FSM hot path.
 	publishCh chan *structs.Events
 
+	aclCh chan *structs.Event
+
 	logger hclog.Logger
 }
 
@@ -58,12 +59,14 @@ func NewEventBroker(ctx context.Context, cfg EventBrokerCfg) *EventBroker {
 		logger:    cfg.Logger.Named("event_broker"),
 		eventBuf:  buffer,
 		publishCh: make(chan *structs.Events, 64),
+		aclCh:     make(chan *structs.Event, 10),
 		subscriptions: &subscriptions{
 			byToken: make(map[string]map[*SubscribeRequest]*Subscription),
 		},
 	}
 
 	go e.handleUpdates(ctx)
+	go e.handleACLUpdates(ctx)
 
 	return e
 }
@@ -80,9 +83,9 @@ func (e *EventBroker) Publish(events *structs.Events) {
 	}
 
 	// ACL check subscriptions
-	for _, e := range events.Events {
-		if e.Type == state.TypeACLTokenDeleted {
-			// TODO close subscription for this token
+	for _, event := range events.Events {
+		if event.Topic == structs.TopicACLToken || event.Topic == structs.TopicACLPolicy {
+			e.aclCh <- &event
 		}
 	}
 
@@ -143,6 +146,24 @@ func (e *EventBroker) handleUpdates(ctx context.Context) {
 			return
 		case update := <-e.publishCh:
 			e.eventBuf.Append(update)
+		}
+	}
+}
+
+func (e *EventBroker) handleACLUpdates(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-e.aclCh:
+			switch payload := update.Payload.(type) {
+			case structs.ACLTokenEvent:
+				if update.Type == structs.TypeACLTokenDeleted {
+					e.subscriptions.closeSubscriptionsForTokens([]string{payload.ACLToken.SecretID})
+				}
+			case structs.ACLPolicyEvent:
+			}
+			// logic
 		}
 	}
 }

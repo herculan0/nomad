@@ -109,6 +109,52 @@ func TestEventBroker_EmptyReqToken_DistinctSubscriptions(t *testing.T) {
 	require.Equal(t, subscriptionStateOpen, atomic.LoadUint32(&sub2.state))
 }
 
+func TestEventBroker_handleACLUpdates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	publisher := NewEventBroker(ctx, EventBrokerCfg{})
+
+	sub1, err := publisher.Subscribe(&SubscribeRequest{
+		Topics: map[structs.Topic][]string{
+			"*": {"*"},
+		},
+		Token: "foo",
+	})
+	require.NoError(t, err)
+	defer sub1.Unsubscribe()
+
+	aclEvent := structs.Event{
+		Topic: structs.TopicACLToken,
+		Type:  structs.TypeACLTokenDeleted,
+		Payload: structs.ACLTokenEvent{
+			ACLToken: &structs.ACLToken{
+				SecretID: "foo",
+			},
+		},
+	}
+
+	// Publish acl event and subsequent events to ensure we eventually get an
+	// unssubscribed error
+	publisher.Publish(&structs.Events{Index: 100, Events: []structs.Event{aclEvent}})
+	for i := 101; i < 110; i++ {
+		idx := uint64(i)
+		publisher.Publish(&structs.Events{Index: idx, Events: []structs.Event{{Index: idx}}})
+	}
+
+	for {
+		_, err := sub1.Next(ctx)
+		if err == ErrSubscriptionClosed {
+			break
+		}
+	}
+
+	out, err := sub1.Next(ctx)
+	require.Error(t, err)
+	require.Equal(t, ErrSubscriptionClosed, err)
+	require.Equal(t, structs.Events{}, out)
+}
+
 func consumeSubscription(ctx context.Context, sub *Subscription) <-chan subNextResult {
 	eventCh := make(chan subNextResult, 1)
 	go func() {
