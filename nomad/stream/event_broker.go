@@ -21,7 +21,6 @@ const (
 )
 
 type EventBrokerCfg struct {
-	Snapshotter     StateSnapshotter
 	EventBufferSize int64
 	Logger          hclog.Logger
 }
@@ -40,7 +39,7 @@ type EventBroker struct {
 	// the Commit call in the FSM hot path.
 	publishCh chan *structs.Events
 
-	aclState StateSnapshotter
+	aclDelegate ACLDelegate
 
 	aclCh chan *structs.Event
 
@@ -51,7 +50,7 @@ type EventBroker struct {
 // A goroutine is run in the background to publish events to an event buffer.
 // Cancelling the context will shutdown the goroutine to free resources, and stop
 // all publishing.
-func NewEventBroker(ctx context.Context, cfg EventBrokerCfg) *EventBroker {
+func NewEventBroker(ctx context.Context, aclDelegate ACLDelegate, cfg EventBrokerCfg) *EventBroker {
 	if cfg.Logger == nil {
 		cfg.Logger = hclog.NewNullLogger()
 	}
@@ -63,10 +62,11 @@ func NewEventBroker(ctx context.Context, cfg EventBrokerCfg) *EventBroker {
 
 	buffer := newEventBuffer(cfg.EventBufferSize)
 	e := &EventBroker{
-		logger:    cfg.Logger.Named("event_broker"),
-		eventBuf:  buffer,
-		publishCh: make(chan *structs.Events, 64),
-		aclCh:     make(chan *structs.Event, 10),
+		logger:      cfg.Logger.Named("event_broker"),
+		eventBuf:    buffer,
+		publishCh:   make(chan *structs.Events, 64),
+		aclCh:       make(chan *structs.Event, 10),
+		aclDelegate: aclDelegate,
 		subscriptions: &subscriptions{
 			byToken: make(map[string]map[*SubscribeRequest]*Subscription),
 		},
@@ -152,6 +152,7 @@ func (e *EventBroker) handleUpdates(ctx context.Context) {
 			e.subscriptions.closeAll()
 			return
 		case update := <-e.publishCh:
+			println("appending event to eventbuf")
 			e.eventBuf.Append(update)
 		}
 	}
@@ -171,7 +172,11 @@ func (e *EventBroker) handleACLUpdates(ctx context.Context) {
 					continue
 				}
 
-				e.checkSubscriptionsByToken(payload.ACLToken.SecretID)
+				if e.aclDelegate != nil {
+					aclTokenProvider := e.aclDelegate.TokenProvider()
+					e.closeInvalidSubscriptions(aclTokenProvider, payload.ACLToken.SecretID)
+				}
+
 				// if err := e.ACLValidForReq()
 				// Token was updated
 				// policy was removed, unsub
@@ -189,22 +194,57 @@ func (e *EventBroker) handleACLUpdates(ctx context.Context) {
 	}
 }
 
-type ACLResolver interface {
+type ACLTokenProvider interface {
 	ACLTokenBySecretID(ws memdb.WatchSet, secretID string) (*structs.ACLToken, error)
 	ACLPolicyByName(ws memdb.WatchSet, policyName string) (*structs.ACLPolicy, error)
 }
 
-type StateSnapshotter interface {
-	ACLResolver() (ACLResolver, error)
+type ACLDelegate interface {
+	TokenProvider() ACLTokenProvider
 }
 
-func (e *EventBroker) checkSubscriptionsByToken(secretID string) {
+func (e *EventBroker) closeInvalidSubscriptions(aclTokenProvider ACLTokenProvider, secretID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if subs, ok := e.subscriptions.byToken[secretID]; ok {
 		for _, sub := range subs {
-			if err := e.ValidateSubscription(sub.req, secretID); err != nil {
+			// should this sub even be stored if it's invalid?
+			if len(sub.req.Topics) == 0 {
+				// return fmt.Errorf("invalid topic request")
+				continue
+			}
+
+			policies := make(map[string]struct{})
+			var required = struct{}{}
+
+			for topic := range sub.req.Topics {
+				switch topic {
+				case structs.TopicDeployment,
+					structs.TopicEval,
+					structs.TopicAlloc,
+					structs.TopicJob:
+					policies[acl.NamespaceCapabilityReadJob] = required
+				case structs.TopicNode:
+					policies["node-read"] = required
+				case structs.TopicAll:
+					policies["management"] = required
+					// TODO handle ACL
+				default:
+					// return fmt.Errorf("unknown topic %s", topic)
+					continue
+				}
+			}
+
+			aclObj, err := aclForTokenSecretID(aclTokenProvider, secretID)
+			if err != nil || aclObj == nil {
+				e.logger.Error("failed resolving ACL for secretID", "error", err)
+				sub.forceClose()
+				continue
+			}
+
+			// run the check
+			if allowed := aclAllowsReq(policies, sub.req.Namespace, aclObj); !allowed {
 				sub.forceClose()
 			}
 		}
@@ -212,93 +252,52 @@ func (e *EventBroker) checkSubscriptionsByToken(secretID string) {
 
 }
 
-func (e *EventBroker) InvalidSubscription(sub *SubscribeRequest, secretID string) bool {
-	// TODO what happens if the leaderACL is passed
-
-	resolver, err := e.aclState.ACLResolver()
+func aclForTokenSecretID(aclTokenProvider ACLTokenProvider, secretID string) (*acl.ACL, error) {
+	aclToken, err := aclTokenProvider.ACLTokenBySecretID(nil, secretID)
 	if err != nil {
-		return true
-	}
-
-	aclToken, err := resolver.ACLTokenBySecretID(nil, secretID)
-	if err != nil {
-		return true
+		return nil, err
 	}
 	if aclToken == nil {
-		return structs.ErrTokenNotFound
+		return nil, structs.ErrTokenNotFound
 	}
 
 	policies := make([]*structs.ACLPolicy, 0, len(aclToken.Policies))
 	for _, policyName := range aclToken.Policies {
-		policy, err := resolver.ACLPolicyByName(nil, policyName)
+		policy, err := aclTokenProvider.ACLPolicyByName(nil, policyName)
 		if err != nil {
-			return true
+			return nil, err
 		}
 		if policy == nil {
 			continue
 		}
 		policies = append(policies, policy)
 	}
-
-	aclObj, err := structs.CompileACLObject(&lru.TwoQueueCache{}, policies)
+	twoQueue, err := lru.New2Q(2)
 	if err != nil {
-		return true
+		return nil, err
 	}
-	if aclObj == nil {
-		return true
-	}
-
-	// run the check
-	if err := aclCheckForEvents(sub, aclObj); err != nil {
-		return true
-	}
-	return false
-
+	return structs.CompileACLObject(twoQueue, policies)
 }
 
-func aclCheckForEvents(subReq *SubscribeRequest, aclObj *acl.ACL) error {
-	if len(subReq.Topics) == 0 {
-		return fmt.Errorf("invalid topic request")
-	}
-
-	reqPolicies := make(map[string]struct{})
-	var required = struct{}{}
-
-	for topic := range subReq.Topics {
-		switch topic {
-		case structs.TopicDeployment, structs.TopicEval,
-			structs.TopicAlloc, structs.TopicJob:
-			if _, ok := reqPolicies[acl.NamespaceCapabilityReadJob]; !ok {
-				reqPolicies[acl.NamespaceCapabilityReadJob] = required
-			}
-		case structs.TopicNode:
-			reqPolicies["node-read"] = required
-		case structs.TopicAll:
-			reqPolicies["management"] = required
-		// TODO handle ACL
-		default:
-			return fmt.Errorf("unknown topic %s", topic)
-		}
-	}
-
-	for checks := range reqPolicies {
-		switch checks {
+func aclAllowsReq(policies map[string]struct{}, namespace string, aclObj *acl.ACL) bool {
+	for policy := range policies {
+		switch policy {
 		case acl.NamespaceCapabilityReadJob:
-			if ok := aclObj.AllowNsOp(subReq.Namespace, acl.NamespaceCapabilityReadJob); !ok {
-				return structs.ErrPermissionDenied
+			if ok := aclObj.AllowNsOp(namespace, acl.NamespaceCapabilityReadJob); !ok {
+				return false
 			}
 		case "node-read":
 			if ok := aclObj.AllowNodeRead(); !ok {
-				return structs.ErrPermissionDenied
+				return false
 			}
 		case "management":
 			if ok := aclObj.IsManagement(); !ok {
-				return structs.ErrPermissionDenied
+				return false
 			}
 		}
 	}
 
-	return nil
+	return true
 }
 
 func (s *Subscription) forceClose() {

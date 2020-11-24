@@ -51,6 +51,7 @@ const (
 	TypeJobBatchDeregistered     = "JobBatchDeregistered"
 	TypePlanResult               = "PlanResult"
 	TypeACLTokenDeleted          = "ACLTokenDeleted"
+	TypeACLTokenUpserted         = "ACLTokenUpserted"
 )
 
 // Event represents a change in Nomads state.
