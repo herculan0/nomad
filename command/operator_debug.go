@@ -21,6 +21,8 @@ import (
 
 	"github.com/hashicorp/go-cleanhttp"
 	"github.com/hashicorp/nomad/api"
+	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/posener/complete"
 )
 
@@ -675,7 +677,7 @@ func (c *OperatorDebugCommand) collectPeriodic(client *api.Client) {
 			c.collectNomad(dir, client)
 			c.collectOperator(dir, client)
 			interval = time.After(c.interval)
-			intervalCount += 1
+			intervalCount++
 
 		case <-c.ctx.Done():
 			return

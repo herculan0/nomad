@@ -138,7 +138,8 @@ func TestDebugFail_Pprof(t *testing.T) {
 	code := cmd.Run([]string{"-address", url, "-duration", "250ms", "-server-id", "all"})
 
 	assert.Equal(t, 0, code) // Pprof failure isn't fatal
-	require.Contains(t, ui.ErrorWriter.String(), "Failed to retrieve pprof profile.prof")
+	require.Contains(t, ui.ErrorWriter.String(), "Failed to retrieve pprof")
+	require.Contains(t, ui.ErrorWriter.String(), "Permission denied")
 	require.Contains(t, ui.OutputWriter.String(), "Starting debugger")
 	require.Contains(t, ui.OutputWriter.String(), "Created debug archive")
 
