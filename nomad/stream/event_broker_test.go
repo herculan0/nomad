@@ -109,7 +109,46 @@ func TestEventBroker_EmptyReqToken_DistinctSubscriptions(t *testing.T) {
 	require.Equal(t, subscriptionStateOpen, atomic.LoadUint32(&sub2.state))
 }
 
-func TestEventBroker_handleACLUpdates(t *testing.T) {
+func TestEventBroker_handleACLUpdates_tokendeleted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	publisher := NewEventBroker(ctx, EventBrokerCfg{})
+
+	sub1, err := publisher.Subscribe(&SubscribeRequest{
+		Topics: map[structs.Topic][]string{
+			"*": {"*"},
+		},
+		Token: "foo",
+	})
+	require.NoError(t, err)
+	defer sub1.Unsubscribe()
+
+	aclEvent := structs.Event{
+		Topic: structs.TopicACLToken,
+		Type:  structs.TypeACLTokenDeleted,
+		Payload: structs.ACLTokenEvent{
+			ACLToken: &structs.ACLToken{
+				SecretID: "foo",
+			},
+		},
+	}
+
+	publisher.Publish(&structs.Events{Index: 100, Events: []structs.Event{aclEvent}})
+	for {
+		_, err := sub1.Next(ctx)
+		if err == ErrSubscriptionClosed {
+			break
+		}
+	}
+
+	out, err := sub1.Next(ctx)
+	require.Error(t, err)
+	require.Equal(t, ErrSubscriptionClosed, err)
+	require.Equal(t, structs.Events{}, out)
+}
+
+func TestEventBroker_handleACLUpdates_policyupdated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 

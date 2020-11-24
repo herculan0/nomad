@@ -110,13 +110,6 @@ func (s *Subscription) NextNoBlock() ([]structs.Event, error) {
 	}
 }
 
-func (s *Subscription) forceClose() {
-	swapped := atomic.CompareAndSwapUint32(&s.state, subscriptionStateOpen, subscriptionStateClosed)
-	if swapped {
-		close(s.forceClosed)
-	}
-}
-
 func (s *Subscription) Unsubscribe() {
 	s.unsub()
 }

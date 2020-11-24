@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-memdb"
+	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/nomad/structs"
 
 	"github.com/hashicorp/go-hclog"
@@ -17,6 +21,7 @@ const (
 )
 
 type EventBrokerCfg struct {
+	Snapshotter     StateSnapshotter
 	EventBufferSize int64
 	Logger          hclog.Logger
 }
@@ -34,6 +39,8 @@ type EventBroker struct {
 	// publishes events, so that publishing can happen asynchronously from
 	// the Commit call in the FSM hot path.
 	publishCh chan *structs.Events
+
+	aclState StateSnapshotter
 
 	aclCh chan *structs.Event
 
@@ -161,8 +168,11 @@ func (e *EventBroker) handleACLUpdates(ctx context.Context) {
 				// Token was deleted
 				if update.Type == structs.TypeACLTokenDeleted {
 					e.subscriptions.closeSubscriptionsForTokens([]string{payload.ACLToken.SecretID})
+					continue
 				}
 
+				e.checkSubscriptionsByToken(payload.ACLToken.SecretID)
+				// if err := e.ACLValidForReq()
 				// Token was updated
 				// policy was removed, unsub
 				// policy was added or not removed, ignore
@@ -176,6 +186,124 @@ func (e *EventBroker) handleACLUpdates(ctx context.Context) {
 			}
 			// logic
 		}
+	}
+}
+
+type ACLResolver interface {
+	ACLTokenBySecretID(ws memdb.WatchSet, secretID string) (*structs.ACLToken, error)
+	ACLPolicyByName(ws memdb.WatchSet, policyName string) (*structs.ACLPolicy, error)
+}
+
+type StateSnapshotter interface {
+	ACLResolver() (ACLResolver, error)
+}
+
+func (e *EventBroker) checkSubscriptionsByToken(secretID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if subs, ok := e.subscriptions.byToken[secretID]; ok {
+		for _, sub := range subs {
+			if err := e.ValidateSubscription(sub.req, secretID); err != nil {
+				sub.forceClose()
+			}
+		}
+	}
+
+}
+
+func (e *EventBroker) InvalidSubscription(sub *SubscribeRequest, secretID string) bool {
+	// TODO what happens if the leaderACL is passed
+
+	resolver, err := e.aclState.ACLResolver()
+	if err != nil {
+		return true
+	}
+
+	aclToken, err := resolver.ACLTokenBySecretID(nil, secretID)
+	if err != nil {
+		return true
+	}
+	if aclToken == nil {
+		return structs.ErrTokenNotFound
+	}
+
+	policies := make([]*structs.ACLPolicy, 0, len(aclToken.Policies))
+	for _, policyName := range aclToken.Policies {
+		policy, err := resolver.ACLPolicyByName(nil, policyName)
+		if err != nil {
+			return true
+		}
+		if policy == nil {
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	aclObj, err := structs.CompileACLObject(&lru.TwoQueueCache{}, policies)
+	if err != nil {
+		return true
+	}
+	if aclObj == nil {
+		return true
+	}
+
+	// run the check
+	if err := aclCheckForEvents(sub, aclObj); err != nil {
+		return true
+	}
+	return false
+
+}
+
+func aclCheckForEvents(subReq *SubscribeRequest, aclObj *acl.ACL) error {
+	if len(subReq.Topics) == 0 {
+		return fmt.Errorf("invalid topic request")
+	}
+
+	reqPolicies := make(map[string]struct{})
+	var required = struct{}{}
+
+	for topic := range subReq.Topics {
+		switch topic {
+		case structs.TopicDeployment, structs.TopicEval,
+			structs.TopicAlloc, structs.TopicJob:
+			if _, ok := reqPolicies[acl.NamespaceCapabilityReadJob]; !ok {
+				reqPolicies[acl.NamespaceCapabilityReadJob] = required
+			}
+		case structs.TopicNode:
+			reqPolicies["node-read"] = required
+		case structs.TopicAll:
+			reqPolicies["management"] = required
+		// TODO handle ACL
+		default:
+			return fmt.Errorf("unknown topic %s", topic)
+		}
+	}
+
+	for checks := range reqPolicies {
+		switch checks {
+		case acl.NamespaceCapabilityReadJob:
+			if ok := aclObj.AllowNsOp(subReq.Namespace, acl.NamespaceCapabilityReadJob); !ok {
+				return structs.ErrPermissionDenied
+			}
+		case "node-read":
+			if ok := aclObj.AllowNodeRead(); !ok {
+				return structs.ErrPermissionDenied
+			}
+		case "management":
+			if ok := aclObj.IsManagement(); !ok {
+				return structs.ErrPermissionDenied
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *Subscription) forceClose() {
+	if atomic.CompareAndSwapUint32(&s.state, subscriptionStateOpen, subscriptionStateClosed) {
+		close(s.forceClosed)
 	}
 }
 

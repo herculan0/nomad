@@ -77,6 +77,14 @@ type StateStore struct {
 	stopEventBroker func()
 }
 
+type aclResolver struct {
+	s *StateStore
+}
+
+func (a *aclResolver) ACLResolver() (stream.ACLResolver, error) {
+	return a.s.Snapshot()
+}
+
 // NewStateStore is used to create a new state store
 func NewStateStore(config *StateStoreConfig) (*StateStore, error) {
 	// Create the MemDB
@@ -97,6 +105,7 @@ func NewStateStore(config *StateStoreConfig) (*StateStore, error) {
 	if config.EnablePublisher {
 		// Create new event publisher using provided config
 		broker := stream.NewEventBroker(ctx, stream.EventBrokerCfg{
+			Snapshotter:     &aclResolver{s},
 			EventBufferSize: config.EventBufferSize,
 			Logger:          config.Logger,
 		})
