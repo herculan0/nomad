@@ -498,7 +498,15 @@ func (c *OperatorDebugCommand) path(paths ...string) string {
 
 // mkdir creates directories in the tmp root directory
 func (c *OperatorDebugCommand) mkdir(paths ...string) error {
-	return os.MkdirAll(c.path(paths...), 0755)
+	joinedPath := c.path(paths...)
+
+	// Ensure path doesn't escape the sandbox of the capture directory
+	escapes := helper.PathEscapesSandbox(c.collectDir, joinedPath)
+	if escapes {
+		return fmt.Errorf("file path escapes capture directory")
+	}
+
+	return os.MkdirAll(joinedPath, 0755)
 }
 
 // startMonitors starts go routines for each node and client
@@ -806,6 +814,12 @@ func (c *OperatorDebugCommand) writeBytes(dir, file string, data []byte) error {
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("failed to create parent directories of \"%s\": %s", dirPath, err.Error()))
 		return err
+	}
+
+	// Ensure filename doesn't escape the sandbox of the capture directory
+	escapes := helper.PathEscapesSandbox(c.collectDir, filePath)
+	if escapes { //&& sandboxEnabled {
+		return fmt.Errorf("file path escapes capture directory")
 	}
 
 	// Create the file
